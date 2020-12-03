@@ -1,7 +1,9 @@
 /**
  * @file csapp.h
  * @brief Prototypes and definitions for the CS:APP3e book
- *
+ * AUTHOR: Aichen Yao   
+ * ANDREW ID: aicheny
+ * GITHUB ID: AichenYao
  * This file consists of four major components:
  *
  * - The RIO (robust I/O) package, which allows performing reads and writes

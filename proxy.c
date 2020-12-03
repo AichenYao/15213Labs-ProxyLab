@@ -50,7 +50,7 @@
  */
 static const char *header_user_agent = "Mozilla/5.0"
                                        " (X11; Linux x86_64; rv:3.10.0)"
-                                       " Gecko/20201123 Firefox/63.0.1";
+                                       " Gecko/20201123 Firefox/63.0.1\r\n";
 
 /* Display an error message to the users */
 void clienterror(int fd, const char *errnum, const char *shortmsg,
@@ -99,112 +99,144 @@ void clienterror(int fd, const char *errnum, const char *shortmsg,
 }
 
 
-
-void doit(int client_fd) {
+int send_to_server(int client_fd)
+{
     int server_fd = 0;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     rio_t client_rio, server_rio;
     //associate client's fd with its rio structure
     rio_readinitb(&client_rio, client_fd);
-    int n = rio_readlineb(&client_rio, buf, MAXLINE);
-    if (n == -1) {
-        return;
-    }
-    sscanf(buf, "%s %s %s", method, uri, version);
+    int n;
     parser_t *new_parser = parser_new();
-    parser_state new_parser_state = parser_parse_line(new_parser, buf);
-    if (new_parser_state == ERROR) {
+    char send_final[MAXLINE];
+    //send_final is the request and all headers that we are sending
+    while ((n = rio_readlineb(&client_rio, buf, MAXLINE)) > 0)
+    {
+        if (!strcmp(buf, "\r\n"))
+        {
+            break;
+        }
+        sscanf(buf, "%s %s %s", method, uri, version);
+        parser_state new_parser_state = parser_parse_line(new_parser, buf);
+        if (new_parser_state == ERROR) {
+            printf("parser error\n");
+            parser_free(new_parser);
+            return -1;
+        }
+        if (new_parser_state == REQUEST) {
+            if (strcasecmp(method, "GET")) {
+                //cannot implement other types of requests
+                clienterror(client_fd, "501"," Not implemented", 
+                "Tiny does not implement this method");
+                parser_free(new_parser);
+                return -1;
+            }
+            const char *hostname;
+            const char *path;
+            const char *port;
+            int ret_num1 = parser_retrieve(new_parser, HOST, &hostname);
+            if (ret_num1 == -1 || ret_num1 == -2) {
+                printf("cannot parse HOST\n");
+                exit(-1);
+            }
+            int ret_num2 = parser_retrieve(new_parser, PATH, &path);
+            if (ret_num2 == -1 || ret_num2 == -2) {
+                printf("cannot parse PATH\n");
+                exit(-1);
+            }
+            int ret_num3 = parser_retrieve(new_parser, PORT, &port);
+            if (ret_num3 == -1 || ret_num3 == -2) {
+                printf("cannot parse PORT\n");
+                exit(-1);
+            }
+            //establish a connection with a server to listen for requests
+            //Assume the GET request is always ahead of the headers.
+            server_fd = open_clientfd(hostname, port);
+            if (server_fd < 0) {
+                printf("connection failed\n");
+                return -1;
+            }
+            rio_readinitb(&server_rio, server_fd);
+            char server_header[MAXLINE];
+            sprintf(server_header, "GET %s HTTP/1.0\r\n", path);
+            strncat(send_final, server_header, MAXLINE-1);
+        }
+        if (new_parser_state == HEADER) {
+            //Host Header
+            header_t *host_header_struct = 
+            parser_lookup_header(new_parser, "Host");
+            char host_header[MAXLINE];
+            sprintf(host_header, "%s: %s\r\n", "Host", (host_header_struct)->value);
+            strncat(send_final, host_header, MAXLINE-1);
+
+            //User-Agent Header
+            char ua_header[MAXLINE];
+            sprintf(ua_header, "%s: %s", "User-Agent", header_user_agent);
+            strncat(send_final, ua_header, MAXLINE-1);
+
+            //Connection Header
+            char conn_header[MAXLINE];
+            sprintf(conn_header, "%s: %s", "Connection", 
+            "close\r\n");
+            strncat(send_final, conn_header, MAXLINE-1);
+
+            //Proxy-Connection Header
+            char pro_header[MAXLINE];
+            sprintf(pro_header, "%s: %s", "Proxy-Connection",  "close\r\n");
+            strncat(send_final, pro_header, MAXLINE-1);
+
+            //forward any other header that is not one of the four above
+            header_t *new_header_struct;
+            while ((new_header_struct = parser_retrieve_next_header(new_parser)) 
+            != NULL) {
+                char new_header[MAXLINE];
+                sprintf(new_header, "%s: %s\r\n", (new_header_struct)->name, 
+                (new_header_struct)->value);
+                strncat(send_final, new_header, MAXLINE-1);
+            }
+            strncat(send_final, "\r\n", MAXLINE-1);
+        }
+    }
+    int writebytes = rio_writen(server_fd, send_final, strlen(send_final));
+    if (writebytes == -1) {
+        printf("an error with sending requests to the server\n");
+        return -1;
+    }
+    if (n == -1) {
+        printf("an error has occured\n");
         parser_free(new_parser);
+        return -1;
+    }
+    //otherwise (n == 0), it has run into EOF
+    parser_free(new_parser);
+    return server_fd;
+}
+
+
+void doit(int client_fd) {
+    //parse command lines (header or GET requests) and send to servers
+    int server_fd = send_to_server(client_fd);
+    if (server_fd == -1)
+    {
+        close(server_fd);
         return;
     }
-    if (new_parser_state == REQUEST) {
-        if (strcasecmp(method, "GET")) {
-            //cannot implement other types of requests
-            clienterror(client_fd, method, "501 Not implemented", 
-            "Tiny does not implement this method");
-        }
-        const char *hostname;
-        const char *path;
-        const char *port;
-        int ret_num1 = parser_retrieve(new_parser, HOST, &hostname);
-        if (ret_num1 == -1 || ret_num1 == -2) {
-            printf("cannot parse HOST\n");
-            exit(-1);
-        }
-        int ret_num2 = parser_retrieve(new_parser, PATH, &path);
-        if (ret_num2 == -1 || ret_num2 == -2) {
-            printf("cannot parse PATH\n");
-            exit(-1);
-        }
-        int ret_num3 = parser_retrieve(new_parser, PORT, &port);
-        if (ret_num3 == -1 || ret_num3 == -2) {
-            printf("cannot parse PORT\n");
-            exit(-1);
-        }
-        server_fd = open_clientfd(hostname, port);
-        if (server_fd < 0) {
-            printf("connection failed\n");
-            return;
-        }
-        rio_readinitb(&server_rio, server_fd);
-        char server_header[MAXLINE];
-        sprintf(server_header, "GET %s HTTp/1.0\r\n", path);
-        rio_writen(server_fd, server_header, strlen(server_header));
+    char buf[MAXLINE];
+    //read the response from the server
+    int readbytes = rio_readn(server_fd, buf, MAXLINE-1);
+    if (readbytes == -1) {
+        close(server_fd);
+        return;
     }
-    if (new_parser_state == HEADER) {
-        const char *hostname;
-        const char *port;
-        int ret_num1 = parser_retrieve(new_parser, HOST, &hostname);
-        if (ret_num1 == -1) {
-            printf("cannot parse HOST\n");
-            exit(-1);
-        }
-        int ret_num3 = parser_retrieve(new_parser, PORT, &port);
-        if (ret_num3 == -1) {
-            printf("cannot parse PORT\n");
-            exit(-1);
-        }
-        server_fd = open_clientfd(hostname, port);
-        if (server_fd < 0) {
-            printf("connection failed\n");
-            return;
-        }
-        rio_readinitb(&server_rio, server_fd);
-
-        //Host Header
-        header_t *host_header_struct = parser_lookup_header(new_parser, "Host");
-        char host_header[MAXLINE];
-        sprintf(host_header, "%s: %s", "Host", (host_header_struct)->value);
-        rio_writen(server_fd, host_header, strlen(host_header));
-
-        //User-Agent Header
-        char ua_header[MAXLINE];
-        sprintf(ua_header, "%s: %s", "User-Agent", header_user_agent);
-        rio_writen(server_fd, ua_header, strlen(ua_header));
-
-        //Connection Header
-        char conn_header[MAXLINE];
-        sprintf(conn_header, "%s: %s", "Connection", 
-        "close\r\n");
-        rio_writen(server_fd, conn_header, strlen(conn_header));
-
-        //Proxy-Connection Header
-        char pro_header[MAXLINE];
-        sprintf(pro_header, "%s: %s", "Proxy-Connection",  "close\r\n");
-        rio_writen(server_fd, pro_header, strlen(pro_header));
-
-        //forward any other header that is not one of the four above
-        header_t *new_header_struct;
-        while ((new_header_struct = parser_retrieve_next_header(new_parser)) 
-        != NULL) {
-            char new_header[MAXLINE];
-            sprintf(new_header, "%s: %s", (new_header_struct)->name, 
-            (new_header_struct)->value);
-            rio_writen(server_fd, new_header, strlen(new_header));
-        }
+    //anything specail if readbytes is 0?
+    //send the response back to the client
+    int writebytes = rio_writen(client_fd, buf, MAXLINE-1);
+    if (writebytes == -1) {
+        printf("writing to client error\n");
+        close(server_fd);
+        return;
     }
     close(server_fd);
-    parser_free(new_parser);
     return;
 }
 
