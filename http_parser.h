@@ -34,8 +34,8 @@ typedef struct parser parser_t;
  * modified by the user of the struct.
  */
 typedef struct header {
-    const char *name;     /**< the name of the header */
-    const char *value;    /**< the value of the header */
+    const char *name;  /**< the name of the header */
+    const char *value; /**< the value of the header */
 } header_t;
 
 /**
@@ -56,13 +56,13 @@ typedef enum parser_state {
  * from the parser.
  */
 typedef enum parser_value {
-    METHOD,         /**< HTTP request method, e.g. GET or POST */
-    HOST,           /**< a network host, e.g. cs.cmu.edu */
-    SCHEME,         /**< scheme to connect over, e.g. http or https */
-    URI,            /**< the entire URI */
-    PORT,           /**< The port to connect on, by default 80 */
-    PATH,           /**< The path to find a resource, e.g. index.html */
-    HTTP_VERSION    /**< The HTTP version without the HTTP/, e.g. 1.0 or 1.1 */
+    METHOD,      /**< HTTP request method, e.g. GET or POST */
+    HOST,        /**< a network host, e.g. cs.cmu.edu */
+    SCHEME,      /**< scheme to connect over, e.g. http or https */
+    URI,         /**< the entire URI */
+    PORT,        /**< The port to connect on, by default 80 */
+    PATH,        /**< The path to find a resource, e.g. index.html */
+    HTTP_VERSION /**< The HTTP version without the HTTP/, e.g. 1.0 or 1.1 */
 } parser_value_type;
 
 /**
@@ -171,4 +171,3 @@ header_t *parser_lookup_header(parser_t *p, const char *name);
 header_t *parser_retrieve_next_header(parser_t *p);
 
 #endif /* __HTTP_PARSER_H__ */
-

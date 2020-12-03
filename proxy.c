@@ -52,7 +52,8 @@ static const char *header_user_agent = "Mozilla/5.0"
                                        " (X11; Linux x86_64; rv:3.10.0)"
                                        " Gecko/20201123 Firefox/63.0.1\r\n";
 
-/* Display an error message to the users */
+/* Display an error message to the users;
+ from tiny.c given it the handout */
 void clienterror(int fd, const char *errnum, const char *shortmsg,
                  const char *longmsg) {
     char buf[MAXLINE];
@@ -62,25 +63,25 @@ void clienterror(int fd, const char *errnum, const char *shortmsg,
 
     /* Build the HTTP response body */
     bodylen = snprintf(body, MAXBUF,
-            "<!DOCTYPE html>\r\n" \
-            "<html>\r\n" \
-            "<head><title>Tiny Error</title></head>\r\n" \
-            "<body bgcolor=\"ffffff\">\r\n" \
-            "<h1>%s: %s</h1>\r\n" \
-            "<p>%s</p>\r\n" \
-            "<hr /><em>The Tiny Web server</em>\r\n" \
-            "</body></html>\r\n", \
-            errnum, shortmsg, longmsg);
+                       "<!DOCTYPE html>\r\n"
+                       "<html>\r\n"
+                       "<head><title>Tiny Error</title></head>\r\n"
+                       "<body bgcolor=\"ffffff\">\r\n"
+                       "<h1>%s: %s</h1>\r\n"
+                       "<p>%s</p>\r\n"
+                       "<hr /><em>The Tiny Web server</em>\r\n"
+                       "</body></html>\r\n",
+                       errnum, shortmsg, longmsg);
     if (bodylen >= MAXBUF) {
         return; // Overflow!
     }
 
     /* Build the HTTP response headers */
     buflen = snprintf(buf, MAXLINE,
-            "HTTP/1.0 %s %s\r\n" \
-            "Content-Type: text/html\r\n" \
-            "Content-Length: %zu\r\n\r\n", \
-            errnum, shortmsg, bodylen);
+                      "HTTP/1.0 %s %s\r\n"
+                      "Content-Type: text/html\r\n"
+                      "Content-Length: %zu\r\n\r\n",
+                      errnum, shortmsg, bodylen);
     if (buflen >= MAXLINE) {
         return; // Overflow!
     }
@@ -98,22 +99,19 @@ void clienterror(int fd, const char *errnum, const char *shortmsg,
     }
 }
 
-
-int send_to_server(int client_fd)
-{
+void doit(int client_fd) {
+    // parse command lines (header or GET requests) and send to servers
     int server_fd = 0;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     rio_t client_rio, server_rio;
-    //associate client's fd with its rio structure
+    // associate client's fd with its rio structure
     rio_readinitb(&client_rio, client_fd);
     int n;
     parser_t *new_parser = parser_new();
     char send_final[MAXLINE];
-    //send_final is the request and all headers that we are sending
-    while ((n = rio_readlineb(&client_rio, buf, MAXLINE)) > 0)
-    {
-        if (!strcmp(buf, "\r\n"))
-        {
+    // send_final is the request and all headers that we are sending
+    while ((n = rio_readlineb(&client_rio, buf, MAXLINE)) > 0) {
+        if (!strcmp(buf, "\r\n")) {
             break;
         }
         sscanf(buf, "%s %s %s", method, uri, version);
@@ -121,15 +119,15 @@ int send_to_server(int client_fd)
         if (new_parser_state == ERROR) {
             printf("parser error\n");
             parser_free(new_parser);
-            return -1;
+            return;
         }
         if (new_parser_state == REQUEST) {
             if (strcasecmp(method, "GET")) {
-                //cannot implement other types of requests
-                clienterror(client_fd, "501"," Not implemented", 
-                "Tiny does not implement this method");
+                // cannot implement other types of requests
+                clienterror(client_fd, "501", " Not implemented",
+                            "Tiny does not implement this method");
                 parser_free(new_parser);
-                return -1;
+                return;
             }
             const char *hostname;
             const char *path;
@@ -149,101 +147,87 @@ int send_to_server(int client_fd)
                 printf("cannot parse PORT\n");
                 exit(-1);
             }
-            //establish a connection with a server to listen for requests
-            //Assume the GET request is always ahead of the headers.
+            // establish a connection with a server to listen for requests
+            // Assume the GET request is always ahead of the headers.
             server_fd = open_clientfd(hostname, port);
             if (server_fd < 0) {
                 printf("connection failed\n");
-                return -1;
+                close(server_fd);
+                return;
             }
             rio_readinitb(&server_rio, server_fd);
             char server_header[MAXLINE];
             sprintf(server_header, "GET %s HTTP/1.0\r\n", path);
-            strncat(send_final, server_header, MAXLINE-1);
+            strncat(send_final, server_header, MAXLINE - 1);
         }
         if (new_parser_state == HEADER) {
-            //Host Header
-            header_t *host_header_struct = 
-            parser_lookup_header(new_parser, "Host");
+            // Host Header
+            header_t *host_header_struct =
+                parser_lookup_header(new_parser, "Host");
             char host_header[MAXLINE];
-            sprintf(host_header, "%s: %s\r\n", "Host", (host_header_struct)->value);
-            strncat(send_final, host_header, MAXLINE-1);
+            sprintf(host_header, "%s: %s\r\n", "Host",
+                    (host_header_struct)->value);
+            strncat(send_final, host_header, MAXLINE - 1);
 
-            //User-Agent Header
+            // User-Agent Header
             char ua_header[MAXLINE];
             sprintf(ua_header, "%s: %s", "User-Agent", header_user_agent);
-            strncat(send_final, ua_header, MAXLINE-1);
+            strncat(send_final, ua_header, MAXLINE - 1);
 
-            //Connection Header
+            // Connection Header
             char conn_header[MAXLINE];
-            sprintf(conn_header, "%s: %s", "Connection", 
-            "close\r\n");
-            strncat(send_final, conn_header, MAXLINE-1);
+            sprintf(conn_header, "%s: %s", "Connection", "close\r\n");
+            strncat(send_final, conn_header, MAXLINE - 1);
 
-            //Proxy-Connection Header
+            // Proxy-Connection Header
             char pro_header[MAXLINE];
-            sprintf(pro_header, "%s: %s", "Proxy-Connection",  "close\r\n");
-            strncat(send_final, pro_header, MAXLINE-1);
+            sprintf(pro_header, "%s: %s", "Proxy-Connection", "close\r\n");
+            strncat(send_final, pro_header, MAXLINE - 1);
 
-            //forward any other header that is not one of the four above
+            // forward any other header that is not one of the four above
             header_t *new_header_struct;
-            while ((new_header_struct = parser_retrieve_next_header(new_parser)) 
-            != NULL) {
+            while ((new_header_struct =
+                        parser_retrieve_next_header(new_parser)) != NULL) {
                 char new_header[MAXLINE];
-                sprintf(new_header, "%s: %s\r\n", (new_header_struct)->name, 
-                (new_header_struct)->value);
-                strncat(send_final, new_header, MAXLINE-1);
+                sprintf(new_header, "%s: %s\r\n", (new_header_struct)->name,
+                        (new_header_struct)->value);
+                strncat(send_final, new_header, MAXLINE - 1);
             }
-            strncat(send_final, "\r\n", MAXLINE-1);
+            strncat(send_final, "\r\n", MAXLINE - 1);
         }
     }
+    parser_free(new_parser);
     int writebytes = rio_writen(server_fd, send_final, strlen(send_final));
     if (writebytes == -1) {
         printf("an error with sending requests to the server\n");
-        return -1;
-    }
-    if (n == -1) {
-        printf("an error has occured\n");
-        parser_free(new_parser);
-        return -1;
-    }
-    //otherwise (n == 0), it has run into EOF
-    parser_free(new_parser);
-    return server_fd;
-}
-
-
-void doit(int client_fd) {
-    //parse command lines (header or GET requests) and send to servers
-    int server_fd = send_to_server(client_fd);
-    if (server_fd == -1)
-    {
         close(server_fd);
         return;
     }
-    char buf[MAXLINE];
-    //read the response from the server
-    int readbytes = rio_readn(server_fd, buf, MAXLINE-1);
+    if (n == -1) {
+        printf("an error has occured\n");
+        close(server_fd);
+        return;
+    }
+    // otherwise (n == 0), it has run into EOF
+    char buf_new[MAXLINE];
+    // read the response from the server
+    int readbytes;
+    while ((readbytes = rio_readlineb(&server_rio, buf_new, MAXLINE)) > 0) {
+        rio_writen(client_fd, buf_new, readbytes);
+    }
     if (readbytes == -1) {
         close(server_fd);
         return;
     }
-    //anything specail if readbytes is 0?
-    //send the response back to the client
-    int writebytes = rio_writen(client_fd, buf, MAXLINE-1);
-    if (writebytes == -1) {
-        printf("writing to client error\n");
-        close(server_fd);
-        return;
-    }
+    // anything specail if readbytes is 0?
+    // send the response back to the client
     close(server_fd);
     return;
 }
 
-
 /*  Cite Cs:APP textbook 11.6  */
-//Q: clientaddr
-//Q: Shall I check for errors for each "non-wrapped" functions and exit if -1?
+// Q: clientaddr
+// Q: Shall I check for errors for each "non-wrapped" functions and exit if -1?
 int main(int argc, char **argv) {
     int listen_fd, client_fd;
     char hostname[MAXLINE], port[MAXLINE];
@@ -253,10 +237,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
-    signal(SIGPIPE, SIG_IGN); 
-    //simply ignore SIGPIPE because we don'w want to terminate the whole program
+    signal(SIGPIPE, SIG_IGN);
+    // simply ignore SIGPIPE because we don'w want to terminate the whole
+    // program
     listen_fd = open_listenfd(argv[1]);
-    if(listen_fd == -1) {
+    if (listen_fd == -1) {
         printf("cannot establish a listening descriptor\n");
         exit(1);
     }
@@ -267,8 +252,8 @@ int main(int argc, char **argv) {
             printf("cannot establish a connected descriptor\n");
             continue;
         }
-        int n = getnameinfo(&clientaddr, clientlen, hostname, MAXLINE, port, 
-        MAXLINE, 0);
+        int n = getnameinfo(&clientaddr, clientlen, hostname, MAXLINE, port,
+                            MAXLINE, 0);
         if (n != 0) {
             printf("cannot extract info from the socket address structure\n");
             continue;
