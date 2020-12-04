@@ -103,12 +103,17 @@ void doit(int client_fd) {
     // parse command lines (header or GET requests) and send to servers
     int server_fd = 0;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    strcpy(buf, "");
+    strcpy(method, "");
+    strcpy(uri, "");
+    strcpy(version, "");
     rio_t client_rio, server_rio;
     // associate client's fd with its rio structure
     rio_readinitb(&client_rio, client_fd);
     int n;
     parser_t *new_parser = parser_new();
     char send_final[MAXLINE];
+    strcpy(send_final, "");
     // send_final is the request and all headers that we are sending
     while ((n = rio_readlineb(&client_rio, buf, MAXLINE)) > 0) {
         if (!strcmp(buf, "\r\n")) {
@@ -196,6 +201,7 @@ void doit(int client_fd) {
             strncat(send_final, "\r\n", MAXLINE - 1);
         }
     }
+    fprintf(stderr, "sending to the server: %s\n", send_final);
     parser_free(new_parser);
     int writebytes = rio_writen(server_fd, send_final, strlen(send_final));
     if (writebytes == -1) {
@@ -210,6 +216,7 @@ void doit(int client_fd) {
     }
     // otherwise (n == 0), it has run into EOF
     char buf_new[MAXLINE];
+    strcpy(buf_new, "");
     // read the response from the server
     int readbytes;
     while ((readbytes = rio_readlineb(&server_rio, buf_new, MAXLINE)) > 0) {
