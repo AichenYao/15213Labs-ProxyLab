@@ -113,8 +113,10 @@ void doit(int client_fd) {
     int n;
     parser_t *new_parser = parser_new();
     char send_final[MAXLINE];
-    strcpy(send_final, "");
+    memset(send_final, 0, MAXLINE);
+    int og_header = 0;
     // send_final is the request and all headers that we are sending
+    // CASE: read 0 byte from the client
     while ((n = rio_readlineb(&client_rio, buf, MAXLINE)) > 0) {
         if (!strcmp(buf, "\r\n")) {
             break;
@@ -167,40 +169,57 @@ void doit(int client_fd) {
         }
         if (new_parser_state == HEADER) {
             // Host Header
-            header_t *host_header_struct =
-                parser_lookup_header(new_parser, "Host");
-            char host_header[MAXLINE];
-            sprintf(host_header, "%s: %s\r\n", "Host",
-                    (host_header_struct)->value);
-            strncat(send_final, host_header, MAXLINE - 1);
+            // keep a flag for the 4 headers
+            if (og_header == 0) {
+                header_t *host_header_struct =
+                    parser_lookup_header(new_parser, "Host");
+                char host_header[MAXLINE];
+                sprintf(host_header, "Host: %s\r\n",
+                        (host_header_struct)->value);
+                strncat(send_final, host_header, MAXLINE - 1);
 
-            // User-Agent Header
-            char ua_header[MAXLINE];
-            sprintf(ua_header, "%s: %s", "User-Agent", header_user_agent);
-            strncat(send_final, ua_header, MAXLINE - 1);
+                // User-Agent Header
+                char ua_header[MAXLINE];
+                sprintf(ua_header, "User-Agent: %s", header_user_agent);
+                strncat(send_final, ua_header, MAXLINE - 1);
 
-            // Connection Header
-            char conn_header[MAXLINE];
-            sprintf(conn_header, "%s: %s", "Connection", "close\r\n");
-            strncat(send_final, conn_header, MAXLINE - 1);
+                // Connection Header
+                char conn_header[MAXLINE];
+                sprintf(conn_header, "Connection: %s", "close\r\n");
+                strncat(send_final, conn_header, MAXLINE - 1);
 
-            // Proxy-Connection Header
-            char pro_header[MAXLINE];
-            sprintf(pro_header, "%s: %s", "Proxy-Connection", "close\r\n");
-            strncat(send_final, pro_header, MAXLINE - 1);
-
+                // Proxy-Connection Header
+                char pro_header[MAXLINE];
+                sprintf(pro_header, "Proxy-Connection: %s", "close\r\n");
+                strncat(send_final, pro_header, MAXLINE - 1);
+                og_header = 1;
+            }
             // forward any other header that is not one of the four above
             header_t *new_header_struct;
             while ((new_header_struct =
                         parser_retrieve_next_header(new_parser)) != NULL) {
                 char new_header[MAXLINE];
+                memset(new_header, 0, MAXLINE);
+                if (!strncmp((new_header_struct)->name, "Host",
+                             sizeof("Host")) ||
+                    !strncmp((new_header_struct)->name, "Connection",
+                             sizeof("Connection")) ||
+                    !strncmp((new_header_struct)->name, "Proxy-Connection",
+                             sizeof("Proxy-Connection")) ||
+                    !strncmp((new_header_struct)->name, "User-Agent",
+                             sizeof("User-Agent"))) {
+                    // fprintf(stderr,"continued\n");
+                    continue;
+                }
+                // fprintf(stderr, "--------others--------\n");
                 sprintf(new_header, "%s: %s\r\n", (new_header_struct)->name,
                         (new_header_struct)->value);
-                strncat(send_final, new_header, MAXLINE - 1);
+                fprintf(stderr, "----new header----: %s", new_header);
+                strncat(send_final, new_header, strlen(new_header));
             }
-            strncat(send_final, "\r\n", MAXLINE - 1);
         }
     }
+    strncat(send_final, "\r\n", MAXLINE - 1);
     fprintf(stderr, "sending to the server: %s\n", send_final);
     parser_free(new_parser);
     int writebytes = rio_writen(server_fd, send_final, strlen(send_final));
@@ -219,7 +238,7 @@ void doit(int client_fd) {
     strcpy(buf_new, "");
     // read the response from the server
     int readbytes;
-    while ((readbytes = rio_readlineb(&server_rio, buf_new, MAXLINE)) > 0) {
+    while ((readbytes = rio_readnb(&server_rio, buf_new, MAXLINE)) > 0) {
         rio_writen(client_fd, buf_new, readbytes);
     }
     if (readbytes == -1) {
