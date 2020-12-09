@@ -7,6 +7,7 @@
 
 #include "csapp.h"
 #include "http_parser.h"
+#include "cache.h"
 #include <assert.h>
 #include <ctype.h>
 #include <inttypes.h>
@@ -48,9 +49,11 @@
  * String to use for the User-Agent header.
  * Don't forget to terminate with \r\n
  */
+// pthread_mutex_t mutex;
 static const char *header_user_agent = "Mozilla/5.0"
                                        " (X11; Linux x86_64; rv:3.10.0)"
                                        " Gecko/20201123 Firefox/63.0.1\r\n";
+
 
 /* Display an error message to the users;
  from tiny.c given it the handout */
@@ -136,6 +139,18 @@ void doit(int client_fd) {
                 parser_free(new_parser);
                 return;
             }
+            // block_t *block;
+            // if ((block = cache(uri)) != NULL) {
+            //     //increment the refcnt of the block being hit and decrement 
+            //     //after we write that to the client
+            //     pthread_mutex_lock(&mutex);
+            //     block->refcnt += 1;
+            //     fprintf(stderr,"cache hit: %s\n", block->value);
+            //     rio_writen(client_fd, block->value, strlen(block->value));
+            //     block->refcnt -= 1;
+            //     pthread_mutex_unlock(&mutex);
+            //     return;
+            // }
             const char *hostname;
             const char *path;
             const char *port;
@@ -208,19 +223,16 @@ void doit(int client_fd) {
                              sizeof("Proxy-Connection")) ||
                     !strncmp((new_header_struct)->name, "User-Agent",
                              sizeof("User-Agent"))) {
-                    // fprintf(stderr,"continued\n");
                     continue;
                 }
-                // fprintf(stderr, "--------others--------\n");
                 sprintf(new_header, "%s: %s\r\n", (new_header_struct)->name,
                         (new_header_struct)->value);
-                fprintf(stderr, "----new header----: %s", new_header);
+                // fprintf(stderr, "----new header----: %s", new_header);
                 strncat(send_final, new_header, strlen(new_header));
             }
         }
     }
     strncat(send_final, "\r\n", MAXLINE - 1);
-    fprintf(stderr, "sending to the server: %s\n", send_final);
     parser_free(new_parser);
     int writebytes = rio_writen(server_fd, send_final, strlen(send_final));
     if (writebytes == -1) {
@@ -238,24 +250,50 @@ void doit(int client_fd) {
     strcpy(buf_new, "");
     // read the response from the server
     int readbytes;
+    char value_to_add[MAXLINE];
+    strcpy(value_to_add, "");
+    //int count = 0; //the total number of bytes of the server's response
     while ((readbytes = rio_readnb(&server_rio, buf_new, MAXLINE)) > 0) {
         rio_writen(client_fd, buf_new, readbytes);
+        // count += readbytes;
+        // if (count < MAX_OBJECT_SIZE) {
+        //     memcpy((&(value_to_add[count-readbytes])), buf_new, readbytes);
+        // }
+        // if (count >= MAX_OBJECT_SIZE) {
+        //     fprintf(stderr, "-------block too large------\n");
+        // }
     }
     if (readbytes == -1) {
         close(server_fd);
         return;
     }
-    // anything specail if readbytes is 0?
-    // send the response back to the client
+    // if (count < MAX_OBJECT_SIZE) {
+    //     //if the server's response is less than MAX_OBJECT_SIZE,
+    //     //then add this new block to the cache
+    //     fprintf(stderr, "------new block added-----\n");
+    //     pthread_mutex_lock(&mutex);
+    //     add_new_block(uri, value_to_add);
+    //     pthread_mutex_unlock(&mutex);
+    // }
     close(server_fd);
     return;
+}
+
+void *thread(void *vargp) {
+    int client_fd = *((int *)vargp);
+    pthread_detach(pthread_self());
+    free(vargp);
+    // each thread is responsible for cleaning up resource: the malloced int*
+    doit(client_fd);
+    close(client_fd);
+    return NULL;
 }
 
 /*  Cite Cs:APP textbook 11.6  */
 // Q: clientaddr
 // Q: Shall I check for errors for each "non-wrapped" functions and exit if -1?
 int main(int argc, char **argv) {
-    int listen_fd, client_fd;
+    int listen_fd, *client_fd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr clientaddr;
@@ -273,8 +311,9 @@ int main(int argc, char **argv) {
     }
     while (true) {
         clientlen = sizeof(clientaddr);
-        client_fd = accept(listen_fd, &clientaddr, &clientlen);
-        if (client_fd == -1) {
+        client_fd = malloc(sizeof(int));
+        *client_fd = accept(listen_fd, &clientaddr, &clientlen);
+        if (*client_fd == -1) {
             printf("cannot establish a connected descriptor\n");
             continue;
         }
@@ -285,8 +324,9 @@ int main(int argc, char **argv) {
             continue;
         }
         sio_printf("Accepted connection from (%s, %s)\n", hostname, port);
-        doit(client_fd);
-        close(client_fd);
+        pthread_t tid;
+        // from writeup 5.1: spawn a new worker thread for each request
+        pthread_create(&tid, NULL, thread, (void *)(client_fd));
     }
     return 0;
 }
