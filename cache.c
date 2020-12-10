@@ -12,6 +12,7 @@
 #include <strings.h>
 #include <unistd.h>
 
+
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -28,42 +29,50 @@ static block_t *start = NULL;
 static block_t *end = NULL; //the last valid block
 static int blocks = 0; //total number of blocks stored in the cache
 static int lru_num = 0; //the total number of GET requests
-pthread_mutex_t mutex;
 
-//@param: the URI of the request->key; the requested content->value
-//malloc a new block, set its key, value, and lru_num
-//Its next would point to NULL as a new block is always added to the end 
-//@return: the newly built block
+//@param: a block struct
+//remove the block from the cache list and free the memory used
+//change the next, prev pointers of the previous and next blocks, change the 
+//start and end of the cache if needed
 void free_block(block_t *block) {
+    fprintf(stderr, "*******trying to free block*******\n");
     block_t *prev_block = (block_t *)(block->prev);
     block_t *next_block = (block_t *)(block->next);
     if ((prev_block == NULL) && (next_block == NULL)) {
+        //the only block in the list
         start = NULL;
         end = NULL;
         free(block);
     }
     else if ((prev_block == NULL) && (next_block != NULL)) {
+        //the first block (but not the only)
         start = next_block;
         free(block);
     }
     else if ((prev_block != NULL) && (next_block == NULL)) {
+        //the last block (but not the only)
         end = prev_block;
         free(block);
     }
     else {
+        //the "normal case"
         prev_block->next = next_block;
         next_block->prev = prev_block;
         free(block);
     }
+    blocks -= 1;
+    fprintf(stderr, "*******done freeing block*******\n");
     return;
 }
 
+//@param: the URI of the request->key; the requested content->value
+//malloc a new block, set its key, value, and lru_num
+//@return: the newly built block
 block_t *build_new_block (char key[MAXLINE], char value[MAX_OBJECT_SIZE]) {
     block_t *new_block = malloc(sizeof(block_t));
-    memcpy(new_block->key, key, MAXLINE);
-    memcpy(new_block->value, value, MAX_OBJECT_SIZE);
+    memcpy(new_block->key, key, strlen(key));
+    memcpy(new_block->value, value, strlen(value));
     new_block->lru_num = lru_num;
-    //add to the end of the cache list
     return new_block;
 }
 
@@ -74,7 +83,8 @@ block_t *find_lru(block_t *start) {
     int min_lru = -1;
     block_t *current = NULL;
     block_t *lru_block = NULL;
-    for (current = start; current != NULL; current = current->next) {
+    for (current = start; current != NULL; current = (block_t *)(current->next)) 
+    {
         if ((min_lru == -1) || (current->lru_num < min_lru)) {
             min_lru = current->lru_num;
             lru_block = current;
@@ -90,9 +100,7 @@ block_t *find_lru(block_t *start) {
 //block
 void add_new_block(char key[MAXLINE], char value[MAX_OBJECT_SIZE])
 {   
-    fprintf(stderr, "----adding new blocks-----\n");
-    fprintf(stderr, "------blocks before: %d------\n", blocks);
-    pthread_mutex_lock(&mutex);
+    fprintf(stderr, "*******adding new blocks*******\n");
     if (blocks == MAX_BLOCKS) {
         //if the cache is already full, then we need to evict
         //but we are not adding more blocks to the cache
@@ -101,10 +109,17 @@ void add_new_block(char key[MAXLINE], char value[MAX_OBJECT_SIZE])
             //only evict if refcnt is 0 
            free(evict_block);
         }
+        else {
+            //if the block is currently being used by others, just give up 
+            //saving this new block
+            fprintf(stderr, "*******give up adding******\n");
+            return;
+        }
     }
     block_t *new_block = build_new_block(key, value);
     if ((start == NULL) && (end == NULL)) {
         //when the list is empty
+        fprintf(stderr, "******adding first block******\n");
         start = new_block;
         end = new_block;
         new_block->prev = NULL;
@@ -117,7 +132,6 @@ void add_new_block(char key[MAXLINE], char value[MAX_OBJECT_SIZE])
         end = new_block;
     }
     blocks += 1;
-    pthread_mutex_unlock(&mutex);
     fprintf(stderr, "------blocks after: %d------\n", blocks);
     return;
 }
@@ -126,8 +140,10 @@ void add_new_block(char key[MAXLINE], char value[MAX_OBJECT_SIZE])
 //find a block with the same key if possible
 //@return the block if found, NULL otherwise
 block_t* find_block(char key[MAXLINE]) {
+    fprintf(stderr, "*******trying to find block*******\n");
     block_t *current;
-    for (current = start; current != NULL; current = current->next) {
+    for (current = start; current != NULL; current = (block_t *)(current->next)) 
+    {
         if (!strncmp(current->key, key, strlen(current->key))) {
             //note strncmp() returns 0 if the two inputs match
             //if we've found an idential key
@@ -135,6 +151,7 @@ block_t* find_block(char key[MAXLINE]) {
             return current;
         }
     }
+    fprintf(stderr, "*******done finding block*******\n");
     return NULL;
 }
 
@@ -142,14 +159,12 @@ block_t* find_block(char key[MAXLINE]) {
 //search the whole list of blocks, increment the lru_num
 //@return the block if one with the same key is found. Otherwise return NULL
 block_t* cache(char key[MAXLINE]) {
-    pthread_mutex_lock(&mutex);
     lru_num += 1;
     //everytime that cache() gets called, we are having a new GET request
     block_t *block;
     if ((block = find_block(key)) != NULL) {
-        //if a block gets hit, increment its refcnt by 1
         return block;
     }
-    pthread_mutex_unlock(&mutex);
+    fprintf(stderr, "--------no block found------\n");
     return NULL;
 }

@@ -49,7 +49,7 @@
  * String to use for the User-Agent header.
  * Don't forget to terminate with \r\n
  */
-// pthread_mutex_t mutex;
+pthread_mutex_t mutex;
 static const char *header_user_agent = "Mozilla/5.0"
                                        " (X11; Linux x86_64; rv:3.10.0)"
                                        " Gecko/20201123 Firefox/63.0.1\r\n";
@@ -139,18 +139,23 @@ void doit(int client_fd) {
                 parser_free(new_parser);
                 return;
             }
-            // block_t *block;
-            // if ((block = cache(uri)) != NULL) {
-            //     //increment the refcnt of the block being hit and decrement 
-            //     //after we write that to the client
-            //     pthread_mutex_lock(&mutex);
-            //     block->refcnt += 1;
-            //     fprintf(stderr,"cache hit: %s\n", block->value);
-            //     rio_writen(client_fd, block->value, strlen(block->value));
-            //     block->refcnt -= 1;
-            //     pthread_mutex_unlock(&mutex);
-            //     return;
-            // }
+            block_t *block;
+            pthread_mutex_lock(&mutex);
+            if ((block = cache(uri)) != NULL) {
+                //increment the refcnt of the block being hit and decrement 
+                //after we write that to the client
+                block->refcnt += 1;
+                fprintf(stderr,"cache hit: %s\n", block->value);
+                rio_writen(client_fd, block->value, strlen(block->value));
+                block->refcnt -= 1; 
+                if (block->refcnt == 0) {
+                    free_block(block);
+                }
+                pthread_mutex_unlock(&mutex);
+                return;
+            }
+            pthread_mutex_unlock(&mutex);
+             //if we didn't hit on a block, also unlock
             const char *hostname;
             const char *path;
             const char *port;
@@ -227,7 +232,6 @@ void doit(int client_fd) {
                 }
                 sprintf(new_header, "%s: %s\r\n", (new_header_struct)->name,
                         (new_header_struct)->value);
-                // fprintf(stderr, "----new header----: %s", new_header);
                 strncat(send_final, new_header, strlen(new_header));
             }
         }
@@ -250,9 +254,9 @@ void doit(int client_fd) {
     strcpy(buf_new, "");
     // read the response from the server
     int readbytes;
-    char value_to_add[MAXLINE];
-    strcpy(value_to_add, "");
-    //int count = 0; //the total number of bytes of the server's response
+    // char value_to_add[MAXLINE];
+    // strcpy(value_to_add, "");
+    // int count = 0; //the total number of bytes of the server's response
     while ((readbytes = rio_readnb(&server_rio, buf_new, MAXLINE)) > 0) {
         rio_writen(client_fd, buf_new, readbytes);
         // count += readbytes;
@@ -297,6 +301,7 @@ int main(int argc, char **argv) {
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr clientaddr;
+    pthread_mutex_init(&mutex, NULL);
     if (argc != 2) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
